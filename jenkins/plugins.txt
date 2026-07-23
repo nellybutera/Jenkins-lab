@@ -1,0 +1,7 @@
+git
+github
+workflow-aggregator
+credentials-binding
+htmlpublisher
+junit
+blueocean

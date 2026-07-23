@@ -1,0 +1,15 @@
+services:
+  jenkins:
+    build: ./jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      # Named volume, NOT a bind mount into this OneDrive-synced repo folder --
+      # OneDrive syncing Jenkins' thousands of small home-directory files causes
+      # file-lock/permission issues on Windows.
+      - jenkins_home:/var/jenkins_home
+    restart: unless-stopped
+
+volumes:
+  jenkins_home:
