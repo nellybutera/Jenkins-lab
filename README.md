@@ -2,100 +2,79 @@
 
 ## What this is
 
-This is a lab submission for AmaliTech's QA training program. The assignment: take an automated test suite,
-put it in front of Jenkins, and make Jenkins do what a human tester shouldn't have to do by hand — pull the
-latest code the moment it's pushed, install dependencies, run the full suite, publish a report, and tell
-someone the result. In other words: turn "I have tests" into "tests run themselves, on every change, and
-someone gets told what happened."
+A lab submission for AmaliTech's QA training program. The assignment: take an automated test suite and wire
+it into Jenkins so that a `git push` — not a manual click, not a timer — pulls the latest code, installs
+dependencies, runs the suite, publishes a report, and posts the result to Slack.
 
-Concretely, that meant building three things and wiring them together: a REST Assured test suite against a
-public API, a Jenkins instance running in Docker, and a real GitHub webhook so a `git push` — not a scheduled
-timer, not a manual click — is what starts a build.
+Three pieces, wired together:
+- A REST Assured test suite against a public API
+- A Jenkins instance running in Docker
+- A real GitHub webhook that triggers a build the moment code is pushed
 
 ## The test suite
 
 11 REST Assured + JUnit 5 tests against [FakeStoreAPI](https://fakestoreapi.com)'s `/products` endpoint —
-GET, POST, PUT, DELETE, JSON schema validation, Allure reporting. Full test case documentation is in
-[`test-plan.md`](./test-plan.md).
+GET, POST, PUT, DELETE, JSON schema validation, Allure reporting. Full test case documentation, including
+strategy and rationale, is in [`test-plan.md`](./test-plan.md).
 
-The one thing worth calling out here: before writing a single assertion, I hit the live API with `curl` to see
-what it actually does, rather than assuming it behaves like a textbook REST API. It doesn't. A `GET` on a
-product id that doesn't exist returns `200` with an empty body instead of `404`. A `DELETE` echoes back the
-*entire original object* instead of an empty response. Copying assertions from a previous lab (which targeted
-a different, better-behaved mock API) would have produced tests that fail against the real, correct behavior
-of this one. So the suite asserts what FakeStoreAPI actually does, and `test-plan.md` documents those quirks
-explicitly as observed behavior — not bugs in the suite, not bugs in the API, just a mock service that doesn't
-follow the rules a "real" REST API would.
+Worth calling out: before writing any assertion, I probed the live API with `curl` instead of assuming
+standard REST behavior. It doesn't follow the textbook — a `GET` on a missing id returns `200` with an empty
+body instead of `404`, and `DELETE` echoes back the full original object instead of an empty response. The
+suite asserts what the API actually does, and those quirks are documented as observed behavior, not bugs.
 
 ## Architecture decisions
 
-**Jenkins runs in Docker, built from a custom image** (`jenkins/Dockerfile`) on top of `jenkins/jenkins:lts-jdk17`,
-with Maven 3.9.16 and every required plugin (git, github, pipeline, credentials-binding, htmlpublisher, junit,
-Blue Ocean) baked in via `plugins.txt`. The point of baking all of this into the image rather than installing
-plugins by hand through the UI is reproducibility — anyone can rebuild the exact same Jenkins from this repo
-without a single manual setup click beyond the one-time admin account.
+- **Jenkins runs in Docker**, built from a custom image with Maven 3.9.16 and every required plugin (git,
+  github, pipeline, credentials-binding, htmlpublisher, junit, Blue Ocean) baked in via `plugins.txt` — so the
+  whole environment is reproducible from this repo, no manual plugin installs.
+- **`jenkins_home` is a named Docker volume, not a bind mount** — this repo lives inside a OneDrive-synced
+  folder, and Jenkins writes thousands of small files constantly. Bind-mounting that into OneDrive means
+  OneDrive tries to sync every write in real time and fights Jenkins for file locks. A named volume keeps
+  Jenkins' state outside OneDrive's reach entirely.
+- **Maven runs directly in the Jenkins image, no Docker-in-Docker** — the pipeline only checks out, builds,
+  and tests; it never needs to build an image itself. Containerization is proven separately, by this repo's
+  own `Dockerfile`.
+- **Triggered by a real GitHub webhook, not a polling schedule** — the lab grades webhook integration
+  specifically, and a polling job would produce a similar result through an easier, different mechanism that
+  doesn't demonstrate the same thing.
 
-**`jenkins_home` is a named Docker volume, not a bind mount, and that decision was forced by where this repo
-lives.** It's inside a OneDrive-synced folder. Jenkins' home directory is thousands of small files that get
-written constantly during a build; if that directory were bind-mounted into a OneDrive folder, OneDrive would
-try to sync every one of those writes in real time and fight Jenkins for file locks — which reliably corrupts
-a Jenkins instance. A named volume keeps Jenkins' internal state entirely outside OneDrive's reach while
-staying attached to the container.
+## Getting a public URL to Jenkins: why ngrok, and not Vercel
 
-**Maven runs directly inside the Jenkins container — no Docker-in-Docker.** The pipeline's job is checkout,
-install dependencies, run tests, publish a report. None of that requires the pipeline itself to build a Docker
-image, so there was no reason to mount a Docker socket into Jenkins and take on that complexity. The
-containerization requirement is satisfied separately and directly: this repo's own `Dockerfile` builds and
-runs the test suite in isolation, verified independently of Jenkins entirely.
+Jenkins runs locally with no public address, so a real webhook needs something exposing it to the internet.
+A few options came up while figuring this out:
 
-**The pipeline is triggered by a real GitHub webhook, not a polling schedule.** Jenkins *can* just ask GitHub
-"did anything change?" on a timer — that would have been far less setup. I didn't do that, because the lab
-explicitly calls out webhook integration as its own requirement, and a polling job doesn't demonstrate that
-skill; it just produces a similar-looking result through a different, easier mechanism. Since Jenkins runs
-locally with no public address, getting a real webhook working meant exposing it through a tunnel (ngrok),
-which turned out to be the most failure-prone part of the whole build (see below).
+- **Vercel doesn't fit at all** — it deploys serverless functions and static frontends *to* its own
+  infrastructure. There's no mechanism for it to tunnel traffic back down to a process running on a personal
+  machine, which is exactly what's needed here.
+- **Cloudflare Tunnel / Tailscale Funnel** were real alternatives — both free, both capable of a stable
+  hostname — but both need more setup (a domain in Cloudflare's DNS, or joining a Tailscale network) for what
+  is, in the end, a lab environment.
+- **ngrok** won on setup cost: a free static domain (so the URL doesn't change every restart, unlike ngrok's
+  default random subdomain) and a single command to stand up a tunnel.
+- The native Windows `ngrok.exe`, however, got **flagged and blocked by Windows Defender** ("contains a virus
+  or potentially unwanted software" — a known heuristic false positive against tunneling tools generally).
+  Rather than disabling antivirus protection to force it through, **ngrok runs as a Docker container instead**,
+  on the same Docker network as Jenkins, addressing the Jenkins container directly by name. Sidesteps the
+  Windows-specific problem and removes the native install dependency entirely.
 
-## Blockers, and how they got resolved
+## A couple of things that broke
 
-**The Allure report generator broke on a version that no longer exists.** The `allure-maven` plugin downloads
-the Allure commandline tool as a zip from GitHub releases at build time. The version originally pinned had
-been pruned from GitHub's release list entirely — a 404, not a flaky network error. Fixed by checking GitHub's
-actual current releases and decoupling the commandline tool's version from the Java library version in
-`pom.xml`, so a future prune of one doesn't silently break the other.
+- **The webhook silently did nothing at first.** Checking GitHub's actual delivery log (not just assuming the
+  green "Add webhook" checkmark meant success) showed the real cause: the payload URL was missing a trailing
+  slash. Jenkins redirects `/github-webhook` instead of processing it, and GitHub logs that redirect as a
+  failed delivery rather than following it.
+- **Jenkins blocked its own Allure report from rendering** — its default Content-Security-Policy blocks the
+  inline JavaScript Allure's report needs, so the report link showed a blank page even though the report
+  itself generated correctly. One Script Console command fixed it
+  (`System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")`); the JUnit trend graph on the same
+  build page always showed real data regardless.
 
-**Jenkins blocked its own Allure report from rendering.** Jenkins' default Content-Security-Policy blocks
-inline JavaScript on HTML it serves through the HTML Publisher plugin, and Allure's report is a JS-driven
-single-page app — so the "Allure Report" link on a build page rendered a blank page even though the report
-itself was generated correctly. The JUnit trend graph on the same build page always showed real data
-regardless; the Allure page itself needed one Script Console command
-(`System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")`) to actually display.
+## Verified, not assumed
 
-**The webhook silently did nothing, for a one-character reason.** After registering it on GitHub, pushes
-weren't triggering builds — and the failure was quiet, not an error message anywhere obvious. Checking
-GitHub's own webhook delivery log (not just assuming a green checkmark meant success) showed the actual
-problem: the payload URL was missing a trailing slash (`/github-webhook` instead of `/github-webhook/`).
-Jenkins redirects the un-slashed path instead of processing it, and GitHub logs that redirect as a failed
-delivery rather than following it. One character, but nothing about the setup *looked* broken until the
-delivery log was actually read.
-
-**The native ngrok binary got blocked by Windows Defender**, flagged as "contains a virus or potentially
-unwanted software" — a known heuristic false positive against tunneling tools in general, not anything
-specific to this setup. Rather than disabling antivirus protection to force it through, ngrok runs as a Docker
-container instead, on the same Docker network as Jenkins, addressing the Jenkins container directly by its
-container name. That sidestepped the Windows-specific problem entirely and, incidentally, made the whole setup
-more portable — it no longer depends on a native Windows install at all.
-
-## Verifying it actually works, not just assuming it would
-
-Every layer was proven independently rather than trusted to "probably still work" once assembled: the test
-suite passing on the local machine doesn't guarantee it passes inside a container with a different filesystem
-and no cached dependencies, and it doesn't guarantee it passes inside the *Jenkins* container specifically,
-which is yet another environment. So the suite was run and confirmed green in all three places — locally,
-inside its own Docker image, and freshly cloned inside the running Jenkins container — before ever trusting
-the pipeline to run it unattended. The webhook trigger was verified the same way: not by assuming the GitHub
-UI's "Add webhook" button worked, but by pushing a real commit and reading GitHub's delivery log and Jenkins'
-own build history to confirm a specific commit hash was checked out, built, and passed, with no manual
-intervention.
+- Test suite confirmed green in three separate environments — locally, inside its own Docker image, and
+  freshly cloned inside the running Jenkins container — before trusting the pipeline to run it unattended.
+- Webhook trigger confirmed by pushing a real commit and reading both GitHub's delivery log and Jenkins' build
+  history, matching a specific commit hash through checkout → build → test → pass with no manual step.
 
 ## Repository layout
 
@@ -121,6 +100,5 @@ mvn allure:serve                                                          # view
 docker build -t jenkins-lab-tests . && docker run --rm jenkins-lab-tests  # containerized run
 ```
 
-Both Jenkins and the ngrok tunnel need to be running at the same time as a push for the webhook to actually
-fire — neither is a "set once" configuration, both are live processes that have to be up at the moment code
-changes.
+Both Jenkins and the ngrok tunnel need to be running at the same time as a push for the webhook to fire —
+neither is a "set once" configuration.
