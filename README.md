@@ -81,21 +81,50 @@ System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
 ```
 
 ### 5. Wire up the GitHub webhook
-- Install [ngrok](https://ngrok.com/download), run:
-  ```
-  ngrok http 8080
-  ```
-- Copy the `https://<random>.ngrok-free.app` forwarding URL.
-- On the GitHub repo: **Settings → Webhooks → Add webhook**
-  - Payload URL: `https://<random>.ngrok-free.app/github-webhook/`
-  - Content type: `application/json`
-  - Trigger: Just the push event
-- Push a trivial commit and confirm Jenkins starts a build automatically, and Slack gets notified.
 
-**Known limitation:** the free ngrok URL changes every time you restart the tunnel, so the GitHub webhook URL
-needs re-pointing each session. If you don't want to manage that for a given demo, fall back to **Poll SCM**
-on the job (`* * * * *` schedule) instead of the webhook trigger — documented here as the resilient backup,
-not the primary path, since the lab brief specifically calls out webhook integration as its own deliverable.
+**Claim a free static ngrok domain first** (so the URL never changes between restarts): ngrok dashboard →
+**Universal Gateway → Domains → Create Domain**, and grab your **Authtoken** from the dashboard too.
+
+**Run ngrok as a Docker container** on the same Docker network as Jenkins, rather than the native Windows
+`ngrok.exe` — the native binary gets flagged and blocked by Windows Defender ("contains a virus or potentially
+unwanted software", a known heuristic false positive for tunneling tools). Running it in Docker sidesteps that
+entirely and lets it address the Jenkins container directly by name instead of `localhost`:
+
+```bash
+docker run -d --name ngrok-tunnel \
+  --network jenkins-lab_default \
+  -e NGROK_AUTHTOKEN=<your-authtoken> \
+  ngrok/ngrok:latest http jenkins-lab-jenkins-1:8080 --url=https://<your-static-domain>.ngrok-free.dev
+```
+
+Verify the tunnel actually reaches Jenkins before touching GitHub:
+```bash
+curl -sI https://<your-static-domain>.ngrok-free.dev | grep X-Jenkins
+```
+A `X-Jenkins: <version>` header confirms the request is really landing on your Jenkins container.
+
+**Register the webhook** on the GitHub repo: **Settings → Webhooks → Add webhook**
+  - Payload URL: `https://<your-static-domain>.ngrok-free.dev/github-webhook/` — **the trailing slash is
+    required**. Without it, Jenkins 302-redirects the request instead of processing it, and GitHub logs the
+    delivery as a failure (`Invalid HTTP Response: 302`) rather than following the redirect. Check this exact
+    mistake first if deliveries aren't triggering builds.
+  - Content type: `application/json`
+  - Secret: a random string (e.g. `openssl rand -hex 32`) — GitHub signs every payload with it; for Jenkins to
+    actually *verify* the signature (not just accept the delivery) also configure the same value under
+    **Manage Jenkins → System → GitHub → Advanced → Shared secrets**. Optional hardening, not required for the
+    trigger to work.
+  - Trigger: Just the push event
+
+**Verify end-to-end:** push a commit, then check the delivery log on the webhook's **Recent Deliveries** tab
+(or `gh api repos/<owner>/<repo>/hooks/<id>/deliveries`) for a `200` response, and confirm a new build appeared
+under the job with `SUCCESS` and a Slack notification.
+
+**Known limitation:** the ngrok container (and Jenkins itself) only receives webhooks while both are actually
+running — restarting your machine, Docker Desktop, or `ngrok-tunnel` all require bringing everything back up
+before a push will trigger anything. If you don't want to manage that for a given demo, fall back to
+**Poll SCM** on the job (`* * * * *` schedule) instead of the webhook trigger — documented here as the
+resilient backup, not the primary path, since the lab brief specifically calls out webhook integration as its
+own deliverable.
 
 ### 6. Explore Blue Ocean
 Jenkins → **Open Blue Ocean** (left nav) for the visual pipeline view — good material for the demo recording.
@@ -131,6 +160,3 @@ docker run --rm jenkins-lab-tests
 docker compose up -d          # start Jenkins
 docker compose down           # stop Jenkins (jenkins_home volume persists)
 ```
-
-<!-- webhook trigger test -->
-<!-- webhook verified 2026-07-27T13:13:29Z -->

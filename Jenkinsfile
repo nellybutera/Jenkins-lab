@@ -44,7 +44,10 @@ pipeline {
             }
             post {
                 always {
-                    junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
+                    script {
+                        def results = junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
+                        env.TEST_SUMMARY = "${results.totalCount} run, ${results.failCount} failed, ${results.skipCount} skipped"
+                    }
                     publishHTML(target: [
                         allowMissing: false,
                         alwaysLinkToLastBuild: true,
@@ -60,10 +63,22 @@ pipeline {
 
     post {
         success {
-            notifySlack(":white_check_mark: *SUCCESS* — ${env.JOB_NAME} #${env.BUILD_NUMBER}\\n${env.BUILD_URL}")
+            notifySlack(
+                ":white_check_mark: *SUCCESS* — `${env.JOB_NAME}` #${env.BUILD_NUMBER}\\n" +
+                "*Branch:* `${env.GIT_BRANCH}`  *Commit:* `${env.GIT_COMMIT?.take(7)}`\\n" +
+                "*Tests:* ${env.TEST_SUMMARY}\\n" +
+                "*Duration:* ${currentBuild.durationString}\\n" +
+                "<${env.BUILD_URL}|Build> | <${env.BUILD_URL}Allure_20Report/|Allure Report>"
+            )
         }
         failure {
-            notifySlack(":x: *FAILURE* — ${env.JOB_NAME} #${env.BUILD_NUMBER}\\n${env.BUILD_URL}")
+            notifySlack(
+                ":x: *FAILURE* — `${env.JOB_NAME}` #${env.BUILD_NUMBER}\\n" +
+                "*Branch:* `${env.GIT_BRANCH}`  *Commit:* `${env.GIT_COMMIT?.take(7)}`\\n" +
+                "*Tests:* ${env.TEST_SUMMARY ?: 'suite did not complete'}\\n" +
+                "*Duration:* ${currentBuild.durationString}\\n" +
+                "<${env.BUILD_URL}console|Console Output> | <${env.BUILD_URL}|Build>"
+            )
         }
     }
 }
