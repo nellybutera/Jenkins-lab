@@ -160,3 +160,5 @@ docker run --rm jenkins-lab-tests
 docker compose up -d          # start Jenkins
 docker compose down           # stop Jenkins (jenkins_home volume persists)
 ```
+
+<!-- making a push -->
