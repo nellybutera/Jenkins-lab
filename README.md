@@ -1,7 +1,5 @@
 # Jenkins CI/CD Lab — Automation Test Execution
 
-**Nelly Butera** ([@nellybutera](https://github.com/nellybutera)) — AmaliTech Training Academy, Quality Assurance Labs
-
 REST Assured test suite (JUnit 5 + Allure) against [FakeStoreAPI](https://fakestoreapi.com), containerized and
 run through a Jenkins pipeline with Blue Ocean, a live GitHub webhook trigger, and Slack notifications.
 
