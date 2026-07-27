@@ -67,7 +67,7 @@ pipeline {
                 ":white_check_mark: *SUCCESS* — `${env.JOB_NAME}` #${env.BUILD_NUMBER}\\n" +
                 "*Branch:* `${env.GIT_BRANCH}`  *Commit:* `${env.GIT_COMMIT?.take(7)}`\\n" +
                 "*Tests:* ${env.TEST_SUMMARY}\\n" +
-                "*Duration:* ${currentBuild.durationString}\\n" +
+                "*Duration:* ${currentBuild.durationString.replace(' and counting', '')}\\n" +
                 "<${env.BUILD_URL}|Build> | <${env.BUILD_URL}Allure_20Report/|Allure Report>"
             )
         }
@@ -76,7 +76,7 @@ pipeline {
                 ":x: *FAILURE* — `${env.JOB_NAME}` #${env.BUILD_NUMBER}\\n" +
                 "*Branch:* `${env.GIT_BRANCH}`  *Commit:* `${env.GIT_COMMIT?.take(7)}`\\n" +
                 "*Tests:* ${env.TEST_SUMMARY ?: 'suite did not complete'}\\n" +
-                "*Duration:* ${currentBuild.durationString}\\n" +
+                "*Duration:* ${currentBuild.durationString.replace(' and counting', '')}\\n" +
                 "<${env.BUILD_URL}console|Console Output> | <${env.BUILD_URL}|Build>"
             )
         }
