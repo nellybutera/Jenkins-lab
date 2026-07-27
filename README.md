@@ -133,3 +133,4 @@ docker compose down           # stop Jenkins (jenkins_home volume persists)
 ```
 
 <!-- webhook trigger test -->
+<!-- webhook verified 2026-07-27T13:13:29Z -->
